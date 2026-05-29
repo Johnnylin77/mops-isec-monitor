@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""MOPS 資安重訊監控系統 - 改進版爬蟲"""
+"""MOPS 資安重訊監控系統"""
 
 import asyncio
-import json
 import sys
 import io
 from datetime import datetime, timedelta
@@ -17,116 +16,150 @@ if sys.platform == 'win32':
 from playwright.async_api import async_playwright
 
 
+def is_recent_announcement(date_str):
+    """民國年日期 → 是否在過去30天內"""
+    try:
+        parts = date_str.strip().split()[0].split("/")
+        if len(parts) >= 3:
+            roc_year = int(parts[0])
+            month = int(parts[1])
+            day = int(parts[2])
+            announce_date = datetime(roc_year + 1911, month, day)
+            return announce_date >= datetime.now() - timedelta(days=30)
+    except Exception as e:
+        print(f"[!] 日期解析失敗: {date_str} - {e}")
+    return False
+
+
 async def scrape_mops_announcements():
-    """使用 Playwright 爬取 MOPS 資安重訊"""
+    """使用 Playwright 爬取 MOPS 資安重訊（t05st02 關鍵字搜尋）"""
+    keywords = ["資訊安全", "遭駭", "個資外洩", "資安事件", "勒索", "網路攻擊"]
+    announcements = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-
-        keywords = ["資訊安全", "遭駭", "個資外洩", "資安事件", "勒索", "網路攻擊"]
-        announcements = []
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        )
+        page = await context.new_page()
 
         for keyword in keywords:
             try:
                 print(f"\n[*] 搜尋關鍵字: {keyword}")
 
-                # 訪問搜尋頁面
-                await page.goto("https://mops.twse.com.tw/mops/web/t05st01", timeout=30000)
-                await page.wait_for_load_state("networkidle")
+                # 正確頁面：重大訊息「內容」關鍵字查詢（原本 t05st01 是依公司代號查詢，無關鍵字搜尋）
+                await page.goto(
+                    "https://mops.twse.com.tw/mops/web/t05st02",
+                    timeout=30000,
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_timeout(1500)
+
+                # 除錯：第一次迴圈截圖並列出所有 input
+                if keyword == keywords[0]:
+                    await page.screenshot(path="debug_page.png")
+                    inputs = await page.query_selector_all("input[type=text], input:not([type])")
+                    print(f"[debug] 找到 {len(inputs)} 個文字輸入框")
+                    for inp in inputs:
+                        inp_id = await inp.get_attribute("id")
+                        inp_name = await inp.get_attribute("name")
+                        print(f"  id={inp_id}, name={inp_name}")
+
+                # t05st02 的搜尋欄位，多個 selector 作為 fallback
+                search_box = (
+                    await page.query_selector("#key_word")
+                    or await page.query_selector("input[name='key_word']")
+                    or await page.query_selector("input[name='KEYWORD']")
+                    or await page.query_selector("input[type='text']")
+                )
+
+                if not search_box:
+                    print("[!] 找不到搜尋框，跳過")
+                    await page.screenshot(path=f"debug_{keyword}.png")
+                    continue
+
+                await search_box.fill(keyword)
+
+                # 優先點擊查詢按鈕，比 Enter 更可靠
+                submit_btn = (
+                    await page.query_selector("input[type='submit']")
+                    or await page.query_selector("button[type='submit']")
+                    or await page.query_selector("input[value='查詢']")
+                    or await page.query_selector("input[value='Search']")
+                )
+
+                if submit_btn:
+                    await submit_btn.click()
+                else:
+                    await page.keyboard.press("Enter")
+
+                # 等待結果表格出現
+                try:
+                    await page.wait_for_selector("table", timeout=10000)
+                except Exception:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
                 await page.wait_for_timeout(1000)
 
-                # 清空並填入搜尋框
-                search_box = await page.query_selector("#searchInfo")
-                if search_box:
-                    await search_box.fill("")
-                    await search_box.fill(keyword)
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_load_state("networkidle")
-                    await page.wait_for_timeout(2000)
+                rows = await page.query_selector_all("table tr")
+                print(f"[*] 找到 {len(rows)} 行")
 
-                    # 提取結果表格
-                    rows = await page.query_selector_all("tr")
-                    print(f"[*] 找到 {len(rows)} 行")
+                for i, row in enumerate(rows):
+                    if i == 0:
+                        continue  # 表頭
 
-                    for i, row in enumerate(rows):
-                        if i == 0:  # 跳過表頭
+                    cells = await row.query_selector_all("td")
+                    if len(cells) < 4:
+                        continue
+
+                    try:
+                        cell_texts = []
+                        for cell in cells[:5]:
+                            text = await cell.text_content()
+                            cell_texts.append(text.strip() if text else "")
+
+                        # 欄位：序號 / 公司代號 / 公司名稱 / 日期 / 標題（5欄）
+                        # 或：公司代號 / 公司名稱 / 日期 / 標題（4欄）
+                        if len(cell_texts) >= 5:
+                            code, company, date_str, title = (
+                                cell_texts[1], cell_texts[2], cell_texts[3], cell_texts[4]
+                            )
+                        else:
+                            code, company, date_str, title = (
+                                cell_texts[0], cell_texts[1], cell_texts[2], cell_texts[3]
+                            )
+
+                        if not code or "查無" in title or "查無" in code:
                             continue
 
-                        cells = await row.query_selector_all("td")
-                        if len(cells) >= 4:
-                            try:
-                                cell_texts = []
-                                for j, cell in enumerate(cells[:4]):
-                                    text = await cell.text_content()
-                                    cell_texts.append(text.strip() if text else "")
+                        if not is_recent_announcement(date_str):
+                            continue
 
-                                code = cell_texts[0]
-                                company = cell_texts[1]
-                                date_str = cell_texts[2]
-                                title = cell_texts[3]
+                        if not any(
+                            a["code"] == code and a["date"] == date_str and a["title"] == title
+                            for a in announcements
+                        ):
+                            announcements.append({
+                                "code": code,
+                                "company": company,
+                                "date": date_str,
+                                "title": title,
+                                "keyword": keyword,
+                            })
+                            print(f"[✓] {company} ({code}) - {title[:50]}")
 
-                                # 過濾掉"查無資料"
-                                if title == "查無資料" or not code or code == "查無資料":
-                                    continue
-
-                                # 檢查日期是否在過去一個月內
-                                if not is_recent_announcement(date_str):
-                                    continue
-
-                                announcement = {
-                                    "code": code,
-                                    "company": company,
-                                    "date": date_str,
-                                    "title": title,
-                                    "keyword": keyword,
-                                }
-
-                                # 檢查是否重複
-                                key = f"{code}-{date_str}-{title}"
-                                if not any(a.get("code") == code and a.get("date") == date_str 
-                                          and a.get("title") == title for a in announcements):
-                                    announcements.append(announcement)
-                                    print(f"[✓] 找到: {company} ({code}) - {title[:50]}")
-
-                            except Exception as e:
-                                print(f"[!] 解析行失敗: {e}")
-
-                else:
-                    print("[!] 找不到搜尋框")
+                    except Exception as e:
+                        print(f"[!] 解析行失敗: {e}")
 
             except Exception as e:
                 print(f"[!] 搜尋 '{keyword}' 失敗: {e}")
+                await page.screenshot(path=f"debug_error_{keyword}.png")
 
         await browser.close()
-        return announcements
 
-
-def is_recent_announcement(date_str):
-    """檢查公告日期是否在過去一個月內"""
-    try:
-        # 日期格式: 115/05/29 07:00
-        # 民國年 → 西元年
-        parts = date_str.split()[0].split("/")
-        if len(parts) >= 3:
-            roc_year = int(parts[0])
-            month = int(parts[1])
-            day = int(parts[2])
-            gregorian_year = roc_year + 1911
-            
-            announce_date = datetime(gregorian_year, month, day)
-            one_month_ago = datetime.now() - timedelta(days=30)
-            
-            return announce_date >= one_month_ago
-    except Exception as e:
-        print(f"[!] 日期解析失敗: {date_str} - {e}")
-    
-    return False
+    return announcements
 
 
 def generate_report(announcements):
-    """生成 Markdown 報告"""
-
     today = datetime.now().strftime("%Y-%m-%d")
     one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
@@ -144,7 +177,6 @@ def generate_report(announcements):
 ---
 
 """
-
     for ann in announcements:
         markdown += f"""## {ann['company']} ({ann['code']}) - {ann['title']}
 
@@ -155,13 +187,10 @@ def generate_report(announcements):
 ---
 
 """
-
     return markdown
 
 
 def save_report(markdown_content):
-    """保存報告"""
-
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
 
@@ -176,19 +205,14 @@ def save_report(markdown_content):
 
 
 def git_commit_push(report_file):
-    """提交到 GitHub"""
-
     try:
         subprocess.run(["git", "config", "user.email", "automation@mops-monitor.local"], check=True)
         subprocess.run(["git", "config", "user.name", "MOPS Monitor"], check=True)
         subprocess.run(["git", "add", str(report_file)], check=True)
-
         today = datetime.now().strftime("%Y-%m-%d")
         subprocess.run(["git", "commit", "-m", f"MOPS report: {today}"], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
-
-        print(f"[✓] 已推送到 GitHub")
-
+        print("[✓] 已推送到 GitHub")
     except subprocess.CalledProcessError as e:
         print(f"[!] Git 失敗: {e}")
 
@@ -209,7 +233,6 @@ async def main():
 
         print("\n[步驟 2] 生成報告...")
         report = generate_report(announcements)
-
         if not report:
             return
 
