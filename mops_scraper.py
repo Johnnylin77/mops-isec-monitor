@@ -5,6 +5,10 @@
 import asyncio
 import sys
 import io
+import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
@@ -14,6 +18,10 @@ if sys.platform == 'win32':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from playwright.async_api import async_playwright
+
+# Email 設定（密碼由環境變數傳入，勿寫死於此）
+EMAIL_SENDER = "abcd830428@gmail.com"
+EMAIL_RECEIVER = "abcd830428@gmail.com"
 
 
 def is_recent_announcement(date_str):
@@ -47,7 +55,7 @@ async def scrape_mops_announcements():
             try:
                 print(f"\n[*] 搜尋關鍵字: {keyword}")
 
-                # 正確頁面：重大訊息「內容」關鍵字查詢（原本 t05st01 是依公司代號查詢，無關鍵字搜尋）
+                # 正確頁面：重大訊息「內容」關鍵字查詢
                 await page.goto(
                     "https://mops.twse.com.tw/mops/web/t05st02",
                     timeout=30000,
@@ -65,7 +73,7 @@ async def scrape_mops_announcements():
                         inp_name = await inp.get_attribute("name")
                         print(f"  id={inp_id}, name={inp_name}")
 
-                # t05st02 的搜尋欄位，多個 selector 作為 fallback
+                # t05st02 搜尋欄位，多個 selector 作為 fallback
                 search_box = (
                     await page.query_selector("#key_word")
                     or await page.query_selector("input[name='key_word']")
@@ -164,7 +172,6 @@ def generate_report(announcements):
     one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
     if not announcements:
-        print("[!] 未找到任何符合條件的公告")
         return None
 
     markdown = f"""# MOPS 資安重訊監控報告
@@ -188,6 +195,75 @@ def generate_report(announcements):
 
 """
     return markdown
+
+
+def generate_html_email(announcements):
+    """生成 HTML 格式信件內容"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    rows_html = ""
+    for ann in announcements:
+        rows_html += f"""
+        <tr>
+            <td style="padding:8px;border:1px solid #ddd;">{ann['company']}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{ann['code']}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{ann['date']}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{ann['title']}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{ann['keyword']}</td>
+        </tr>"""
+
+    html = f"""
+    <html><body>
+    <h2>MOPS 資安重訊監控報告</h2>
+    <p><b>報告日期：</b>{today}<br>
+    <b>資料期間：</b>{one_month_ago} 至 {today}<br>
+    <b>公告數量：</b>{len(announcements)} 筆</p>
+    <table style="border-collapse:collapse;width:100%;">
+        <tr style="background:#4472C4;color:white;">
+            <th style="padding:8px;border:1px solid #ddd;">公司名稱</th>
+            <th style="padding:8px;border:1px solid #ddd;">代號</th>
+            <th style="padding:8px;border:1px solid #ddd;">日期</th>
+            <th style="padding:8px;border:1px solid #ddd;">標題</th>
+            <th style="padding:8px;border:1px solid #ddd;">關鍵字</th>
+        </tr>
+        {rows_html}
+    </table>
+    <br><p style="color:gray;font-size:12px;">資料來源：台灣證券交易所公開資訊觀測站</p>
+    </body></html>
+    """
+    return html
+
+
+def send_email(announcements, report_markdown):
+    """寄送監控結果到 Gmail"""
+    password = os.environ.get("GMAIL_APP_PASSWORD")
+    if not password:
+        print("[!] 未設定 GMAIL_APP_PASSWORD 環境變數，跳過發信")
+        return False
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    subject = f"【MOPS 資安重訊】{today} 共 {len(announcements)} 筆公告"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+
+    # 純文字版本（fallback）
+    msg.attach(MIMEText(report_markdown, "plain", "utf-8"))
+    # HTML 版本
+    msg.attach(MIMEText(generate_html_email(announcements), "html", "utf-8"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, password)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        print(f"[✓] 已發送 email 至 {EMAIL_RECEIVER}")
+        return True
+    except Exception as e:
+        print(f"[!] 發信失敗: {e}")
+        return False
 
 
 def save_report(markdown_content):
@@ -239,7 +315,10 @@ async def main():
         print("\n[步驟 3] 保存報告...")
         report_file = save_report(report)
 
-        print("\n[步驟 4] 提交到 GitHub...")
+        print("\n[步驟 4] 發送 Email...")
+        send_email(announcements, report)
+
+        print("\n[步驟 5] 提交到 GitHub...")
         git_commit_push(report_file)
 
         print("\n" + "=" * 60)
