@@ -10,12 +10,15 @@
 import sys
 import io
 import os
+import re
 import time
 import json
 import smtplib
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
@@ -33,6 +36,10 @@ EMAIL_RECEIVER = "abcd830428@gmail.com"
 
 EZSEARCH_URL = "https://mopsov.twse.com.tw/mops/web/ezsearch_query"
 AUDITOR_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05st03"
+DETAIL_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1"
+
+# 產生的分析簡報檔名
+PPTX_FILE = Path("資安事件因應分析.pptx")
 
 # 記錄「前一次報告」的公告清單（用於和這次比對，標記新出現的資安事件 NEW）
 PREV_FILE = Path("reports") / "previous_announcements.json"
@@ -130,6 +137,62 @@ def get_auditor(co_id, session):
         return "", []
 
 
+def classify_event_type(text):
+    """依關鍵字將事件分類"""
+    if any(k in text for k in ("勒索", "加密")):
+        return "勒索病毒/加密"
+    if any(k in text for k in ("個資", "個人資料", "外洩", "外流", "消費者")):
+        return "個資外洩"
+    if any(k in text for k in ("駭客", "網路攻擊", "入侵", "攻擊")):
+        return "駭客攻擊"
+    return "其他"
+
+
+def get_incident_detail(link, session):
+    """依公告 HYPERLINK 抓取完整內文，解析發生緣由 / 影響 / 因應措施"""
+    result = {"cause": "", "impact": "", "future": "", "raw": ""}
+    if not link:
+        return result
+    qs = parse_qs(urlparse(link).query)
+    params = {
+        "firstin": "true", "stp": "1", "step": "1",
+        "SEQ_NO": qs.get("SEQ_NO", [""])[0],
+        "SPOKE_TIME": qs.get("SPOKE_TIME", [""])[0],
+        "SPOKE_DATE": qs.get("SPOKE_DATE", [""])[0],
+        "COMPANY_ID": qs.get("COMPANY_ID", [""])[0],
+    }
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://mopsov.twse.com.tw/mops/web/ezsearch",
+        "User-Agent": "Mozilla/5.0",
+    }
+    try:
+        resp = session.post(DETAIL_URL, data=params, headers=headers, timeout=30)
+        text = BeautifulSoup(resp.content.decode("utf-8", errors="replace"),
+                             "html.parser").get_text("\n", strip=True)
+        result["raw"] = text
+        block = text.split("說明", 1)[1] if "說明" in text else text
+        block = block.split("以上資料均由", 1)[0]
+        fields = {}
+        for item in re.split(r"\n?\s*\d+\.", block):
+            m = re.match(r"([^：:]{2,22})[：:](.*)", item.strip(), re.S)
+            if m:
+                fields[m.group(1).strip()] = re.sub(r"\s+", "", m.group(2))
+
+        def pick(*kws):
+            for k, v in fields.items():
+                if any(kw in k for kw in kws):
+                    return v
+            return ""
+
+        result["cause"] = pick("發生緣由", "緣由")
+        result["impact"] = pick("損失或影響", "影響")
+        result["future"] = pick("因應措施", "改善情形")
+    except Exception as e:
+        print(f"  [!] 抓取內文失敗: {e}")
+    return result
+
+
 def announcement_key(ann):
     """單一資安事件的唯一鍵：公司代號 + 發布日期 + 主旨"""
     return f"{ann['code']}-{ann['date']}-{ann['title']}"
@@ -218,8 +281,18 @@ def scrape_mops_announcements(days=30):
         firm, cpas = auditor_cache[code]
         ann["auditor_firm"] = firm
         ann["auditor_cpas"] = cpas
+
+        # 抓取內文並分類事件類型（供報告與 PPT 使用）
+        detail = get_incident_detail(ann.get("link", ""), session)
+        ann["cause"] = detail["cause"]
+        ann["impact"] = detail["impact"]
+        ann["future"] = detail["future"]
+        # 以主旨 + 發生緣由分類（避免比對到內文「無個資外洩」等否定樣板而誤判）
+        ann["event_type"] = classify_event_type(ann["title"] + " " + detail["cause"])
+        time.sleep(0.2)
+
         tag = " 🆕" if ann["is_new"] else ""
-        print(f"  {ann['company']} ({code}){tag} - {firm} / {'、'.join(cpas)}")
+        print(f"  {ann['company']} ({code}){tag} [{ann['event_type']}] - {firm} / {'、'.join(cpas)}")
 
     # 把「這次報告」的公告清單存起來，供下次比對
     save_previous_keys(announcement_key(a) for a in announcements)
@@ -341,7 +414,7 @@ def generate_html_email(announcements):
     """
 
 
-def send_email(announcements, report_markdown):
+def send_email(announcements, report_markdown, attachment_path=None):
     password = os.environ.get("GMAIL_APP_PASSWORD")
     if not password:
         print("[!] 未設定 GMAIL_APP_PASSWORD，跳過發信")
@@ -353,12 +426,28 @@ def send_email(announcements, report_markdown):
     else:
         subject = f"【MOPS 資安重訊】{today} 無資安事件"
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg.attach(MIMEText(report_markdown, "plain", "utf-8"))
-    msg.attach(MIMEText(generate_html_email(announcements), "html", "utf-8"))
+
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(report_markdown, "plain", "utf-8"))
+    body.attach(MIMEText(generate_html_email(announcements), "html", "utf-8"))
+    msg.attach(body)
+
+    # 附加分析簡報 PPT
+    if attachment_path and Path(attachment_path).exists():
+        with open(attachment_path, "rb") as f:
+            part = MIMEBase("application",
+                            "vnd.openxmlformats-officedocument.presentationml.presentation")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        fname = f"資安事件因應分析_{today}.pptx"
+        part.add_header("Content-Disposition", "attachment",
+                        filename=("utf-8", "", fname))
+        msg.attach(part)
+        print(f"[*] 已附加簡報：{fname}")
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -389,6 +478,8 @@ def git_commit_push(report_file):
         subprocess.run(["git", "add", str(report_file)], check=True)
         if PREV_FILE.exists():
             subprocess.run(["git", "add", str(PREV_FILE)], check=True)
+        if PPTX_FILE.exists():
+            subprocess.run(["git", "add", str(PPTX_FILE)], check=True)
         today = now_tw().strftime("%Y-%m-%d")
         result = subprocess.run(
             ["git", "commit", "-m", f"MOPS report: {today}"],
@@ -422,14 +513,30 @@ def main():
         print("\n[步驟 3] 保存報告...")
         report_file = save_report(report)
 
-        print("\n[步驟 4] 發送 Email...")
-        send_email(announcements, report)
+        print("\n[步驟 4] 產生分析簡報 PPT...")
+        pptx_path = None
+        if announcements:
+            try:
+                from ppt_generator import build_pptx
+                report_date = now_tw().strftime("%Y-%m-%d")
+                period_start = (now_tw() - timedelta(days=query_days)).strftime("%Y-%m-%d")
+                pptx_path = build_pptx(announcements, str(PPTX_FILE), report_date, period_start)
+                print(f"[✓] 簡報已產生：{pptx_path}")
+            except Exception as e:
+                print(f"[!] 產生簡報失敗: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("[*] 無資安事件，略過簡報")
+
+        print("\n[步驟 5] 發送 Email...")
+        send_email(announcements, report, attachment_path=pptx_path)
 
         if announcements:
-            print("\n[步驟 5] 提交到 GitHub...")
+            print("\n[步驟 6] 提交到 GitHub...")
             git_commit_push(report_file)
         else:
-            print("\n[步驟 5] 無資安事件，略過 GitHub 提交")
+            print("\n[步驟 6] 無資安事件，略過 GitHub 提交")
 
         print("\n" + "=" * 60)
         print("[✓] 完成！")
