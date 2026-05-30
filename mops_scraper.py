@@ -1,138 +1,135 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""MOPS 資安重訊監控系統"""
+"""MOPS 資安重訊監控系統
 
-import asyncio
+使用公開資訊觀測站「公告快易查」(ezsearch) 全文檢索，
+以關鍵字比對重大訊息的「主旨 + 內文」，找出資安相關公告。
+純 HTTP 請求，不需瀏覽器。
+"""
+
 import sys
 import io
 import os
+import time
+import json
 import smtplib
+from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
 
+import requests
+
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from playwright.async_api import async_playwright
-
+# ─────────────────────────── 設定 ───────────────────────────
 EMAIL_SENDER = "abcd830428@gmail.com"
 EMAIL_RECEIVER = "abcd830428@gmail.com"
 
-SECURITY_KEYWORDS = ["資訊安全", "資安", "遭駭", "個資外洩", "資安事件", "勒索", "網路攻擊", "資料外洩", "駭客"]
+EZSEARCH_URL = "https://mopsov.twse.com.tw/mops/web/ezsearch_query"
+
+# 資安事件相關關鍵字（比對主旨 + 內文）
+KEYWORDS = [
+    "資安事件",
+    "啟動資安緊急應變",
+    "系統異常",
+    "駭客攻擊",
+    "攻擊事件",
+    "網路攻擊",
+    "應變措施",
+    "駭客網路攻擊",
+    "入侵",
+    "異常通報",
+    "加密攻擊",
+]
+
+# 市場別：sii=上市, otc=上櫃, rotc=興櫃, pub=公開發行
+MARKETS = ["sii", "otc", "rotc", "pub"]
 
 
-async def query_day_announcements(page, roc_year, month, day):
-    """查詢舊版 MOPS 特定日期的所有重大訊息"""
-    results = []
+def roc_date(dt):
+    """西元 datetime → 民國年字串 115/05/30"""
+    return f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+
+
+def ezsearch(keyword, market, sdate, edate, session):
+    """對單一關鍵字 + 市場，呼叫 ezsearch 全文檢索，回傳公告列表"""
+    subject = quote(keyword)  # 等同前端 encodeURIComponent
+    # 注意：日期需保留斜線（不可 URL-encode），AN 須為空、TYPEK 為市場別
+    body = (
+        f"step=00&RADIO_CM=1&TYPEK={market}&CO_MARKET=&CO_ID=&PRO_ITEM="
+        f"&SUBJECT={subject}&SDATE={sdate}&EDATE={edate}&lang=TW&AN="
+    )
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://mopsov.twse.com.tw/mops/web/ezsearch",
+        "User-Agent": "Mozilla/5.0",
+    }
+    resp = session.post(EZSEARCH_URL, data=body.encode("utf-8"), headers=headers, timeout=30)
+    text = resp.content.decode("utf-8", errors="replace")
+    brace = text.find("{")
+    if brace < 0:
+        return []
     try:
-        await page.goto(
-            "https://mopsov.twse.com.tw/mops/web/t05st02",
-            timeout=30000,
-            wait_until="domcontentloaded",
-        )
-        await page.wait_for_timeout(1500)
-
-        await page.locator("#year").fill(str(roc_year))
-        await page.select_option("#month", str(month))
-        await page.select_option("#day", str(day))
-
-        # 點「查詢」按鈕（不是 rulesubmit 搜尋按鈕）
-        btns = await page.query_selector_all("input[type='button']")
-        clicked = False
-        for b in btns:
-            val = (await b.get_attribute("value") or "").strip()
-            bid = await b.get_attribute("id") or ""
-            if "查詢" in val and bid != "rulesubmit":
-                await b.click()
-                clicked = True
-                break
-
-        if not clicked:
-            print(f"  [!] 找不到查詢按鈕")
-            return results
-
-        # 等待 AJAX 回應
-        try:
-            await page.wait_for_function(
-                "document.querySelectorAll('#div01 table tr').length > 3",
-                timeout=12000,
-            )
-        except Exception:
-            await page.wait_for_timeout(5000)
-
-        rows = await page.query_selector_all("#div01 table tr")
-        for row in rows:
-            cells = await row.query_selector_all("td")
-            if len(cells) < 5:
-                continue
-            texts = [(await c.text_content() or "").strip() for c in cells[:5]]
-            date_str, time_str, code, company, title = texts[0], texts[1], texts[2], texts[3], texts[4]
-
-            # 過濾掉表頭、空行
-            if not code or not title or len(code) > 6:
-                continue
-            # 確認是數字代號
-            if not code.isdigit():
-                continue
-
-            results.append({
-                "date": date_str,
-                "time": time_str,
-                "code": code,
-                "company": company,
-                "title": title,
-            })
-
-    except Exception as e:
-        print(f"  [!] 查詢 {roc_year}/{month}/{day} 失敗: {e}")
-
-    return results
+        data = json.loads(text[brace:])
+    except json.JSONDecodeError:
+        return []
+    return data.get("data", []) or []
 
 
-async def scrape_mops_announcements(days=30):
-    """爬取過去 N 天的 MOPS 重大訊息，過濾資安相關"""
-    security_announcements = []
+def scrape_mops_announcements(days=30):
+    """爬取過去 N 天內、符合資安關鍵字的重大訊息"""
+    today = datetime.now()
+    sdate = roc_date(today - timedelta(days=days))
+    edate = roc_date(today)
+
+    session = requests.Session()
+    announcements = []
     seen = set()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+    for keyword in KEYWORDS:
+        print(f"\n[*] 搜尋關鍵字: {keyword}")
+        for market in MARKETS:
+            try:
+                items = ezsearch(keyword, market, sdate, edate, session)
+            except Exception as e:
+                print(f"  [!] {keyword}/{market} 查詢失敗: {e}")
+                continue
 
-        today = datetime.now()
-        for i in range(days):
-            target = today - timedelta(days=i)
-            roc_year = target.year - 1911
-            month = target.month
-            day = target.day
+            for d in items:
+                code = (d.get("COMPANY_ID") or "").strip()
+                company = (d.get("COMPANY_NAME") or "").strip()
+                date_str = (d.get("CDATE") or "").strip()
+                title = (d.get("SUBJECT") or "").strip()
+                link = (d.get("HYPERLINK") or "").strip()
 
-            print(f"[*] 查詢 {roc_year}/{month:02d}/{day:02d}...", end=" ", flush=True)
-            daily = await query_day_announcements(page, roc_year, month, day)
-            print(f"{len(daily)} 筆")
-
-            for ann in daily:
-                # 關鍵字過濾
-                matched = [kw for kw in SECURITY_KEYWORDS if kw in ann["title"]]
-                if not matched:
+                if not code or not title:
                     continue
 
-                key = f"{ann['code']}-{ann['date']}-{ann['title']}"
+                key = f"{code}-{date_str}-{title}"
                 if key in seen:
                     continue
                 seen.add(key)
 
-                ann["keyword"] = "、".join(matched)
-                security_announcements.append(ann)
-                print(f"  [✓] {ann['company']} ({ann['code']}) - {ann['title'][:50]}")
+                announcements.append({
+                    "code": code,
+                    "company": company,
+                    "date": date_str,
+                    "title": title,
+                    "keyword": keyword,
+                    "link": link,
+                })
+                print(f"  [✓] {company} ({code}) - {title[:50]}")
 
-        await browser.close()
+            time.sleep(0.2)  # 禮貌性延遲，避免對伺服器造成負擔
 
-    return security_announcements
+    # 依日期新到舊排序
+    announcements.sort(key=lambda a: a["date"], reverse=True)
+    return announcements
 
 
 def generate_report(announcements):
@@ -165,9 +162,10 @@ def generate_report(announcements):
     for ann in announcements:
         markdown += f"""## {ann['company']} ({ann['code']}) - {ann['title']}
 
-**發布日期：** {ann['date']} {ann.get('time','')}
+**發布日期：** {ann['date']}
 **公司代號：** {ann['code']}
-**符合關鍵字：** {ann['keyword']}
+**命中關鍵字：** {ann['keyword']}
+**公告連結：** {ann.get('link', '')}
 
 ---
 
@@ -181,7 +179,7 @@ def generate_html_email(announcements):
 
     if not announcements:
         return f"""
-        <html><body style="font-family:Arial,sans-serif;">
+        <html><body style="font-family:Arial,'Microsoft JhengHei',sans-serif;">
         <h2 style="color:#2c3e50;">MOPS 資安重訊監控報告</h2>
         <p><b>報告日期：</b>{today}<br>
         <b>資料期間：</b>{one_month_ago} 至 {today}</p>
@@ -196,32 +194,37 @@ def generate_html_email(announcements):
 
     rows_html = ""
     for ann in announcements:
+        link = ann.get("link", "")
+        title_cell = (
+            f'<a href="{link}" style="color:#1565c0;">{ann["title"]}</a>'
+            if link else ann["title"]
+        )
         rows_html += f"""
         <tr>
             <td style="padding:8px;border:1px solid #ddd;">{ann['company']}</td>
             <td style="padding:8px;border:1px solid #ddd;">{ann['code']}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{ann['date']} {ann.get('time','')}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{ann['title']}</td>
+            <td style="padding:8px;border:1px solid #ddd;white-space:nowrap;">{ann['date']}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{title_cell}</td>
             <td style="padding:8px;border:1px solid #ddd;">{ann['keyword']}</td>
         </tr>"""
 
     return f"""
-    <html><body style="font-family:Arial,sans-serif;">
+    <html><body style="font-family:Arial,'Microsoft JhengHei',sans-serif;">
     <h2 style="color:#2c3e50;">MOPS 資安重訊監控報告</h2>
     <p><b>報告日期：</b>{today}<br>
     <b>資料期間：</b>{one_month_ago} 至 {today}<br>
     <b>公告數量：</b>{len(announcements)} 筆</p>
-    <table style="border-collapse:collapse;width:100%;font-size:13px;">
+    <table style="border-collapse:collapse;width:100%;font-size:14px;">
         <tr style="background:#2c3e50;color:white;">
             <th style="padding:10px;border:1px solid #ddd;">公司名稱</th>
             <th style="padding:10px;border:1px solid #ddd;">代號</th>
-            <th style="padding:10px;border:1px solid #ddd;">日期/時間</th>
-            <th style="padding:10px;border:1px solid #ddd;">標題</th>
-            <th style="padding:10px;border:1px solid #ddd;">符合關鍵字</th>
+            <th style="padding:10px;border:1px solid #ddd;">日期</th>
+            <th style="padding:10px;border:1px solid #ddd;">主旨</th>
+            <th style="padding:10px;border:1px solid #ddd;">命中關鍵字</th>
         </tr>
         {rows_html}
     </table>
-    <br><p style="color:gray;font-size:12px;">資料來源：台灣證券交易所公開資訊觀測站（mopsov.twse.com.tw）</p>
+    <br><p style="color:gray;font-size:12px;">資料來源：台灣證券交易所公開資訊觀測站（mopsov.twse.com.tw）｜全文檢索主旨與內文</p>
     </body></html>
     """
 
@@ -286,17 +289,17 @@ def git_commit_push(report_file):
         print(f"[!] Git 失敗: {e}")
 
 
-async def main():
+def main():
     print("=" * 60)
     print("MOPS 資安重訊監控系統")
     print("=" * 60)
 
     try:
-        # 首次執行查30天；日常運行可改小（例如2天）
+        # 查詢天數：預設 30 天，可用環境變數 QUERY_DAYS 調整
         query_days = int(os.environ.get("QUERY_DAYS", "30"))
 
-        print(f"\n[步驟 1] 爬取過去 {query_days} 天的公告...")
-        announcements = await scrape_mops_announcements(days=query_days)
+        print(f"\n[步驟 1] 全文檢索過去 {query_days} 天的資安重訊...")
+        announcements = scrape_mops_announcements(days=query_days)
         print(f"\n[結果] 找到 {len(announcements)} 筆資安相關公告")
 
         print("\n[步驟 2] 生成報告...")
@@ -308,7 +311,6 @@ async def main():
         print("\n[步驟 4] 發送 Email...")
         send_email(announcements, report)
 
-        # 有資料才提交報告到 GitHub
         if announcements:
             print("\n[步驟 5] 提交到 GitHub...")
             git_commit_push(report_file)
@@ -326,4 +328,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
