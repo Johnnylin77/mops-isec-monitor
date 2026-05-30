@@ -21,6 +21,7 @@ from pathlib import Path
 import subprocess
 
 import requests
+from bs4 import BeautifulSoup
 
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -31,6 +32,10 @@ EMAIL_SENDER = "abcd830428@gmail.com"
 EMAIL_RECEIVER = "abcd830428@gmail.com"
 
 EZSEARCH_URL = "https://mopsov.twse.com.tw/mops/web/ezsearch_query"
+AUDITOR_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05st03"
+
+# 記錄歷史上搜尋過的公司代號（用於標記 NEW）
+SEEN_FILE = Path("reports") / "seen_companies.json"
 
 # 資安事件相關關鍵字（比對主旨 + 內文）
 # 註：原「系統異常」太籠統會誤中公開收購樣板，改用更精準的「資訊系統異常／資通系統異常」
@@ -82,6 +87,59 @@ def ezsearch(keyword, market, sdate, edate, session):
     return data.get("data", []) or []
 
 
+def get_auditor(co_id, session):
+    """查詢公司目前的簽證會計師事務所與會計師名稱
+
+    回傳 (事務所名稱, [會計師1, 會計師2])
+    """
+    data = {
+        "encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1",
+        "keyword4": "", "code1": "", "TYPEK": "all", "co_id": co_id,
+    }
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://mopsov.twse.com.tw/mops/web/t05st03",
+        "User-Agent": "Mozilla/5.0",
+    }
+    try:
+        resp = session.post(AUDITOR_URL, data=data, headers=headers, timeout=30)
+        soup = BeautifulSoup(resp.content.decode("utf-8", errors="replace"), "html.parser")
+        firm, cpas = "", []
+        for cell in soup.find_all(["th", "td"]):
+            label = cell.get_text(strip=True)
+            if label == "簽證會計師事務所":
+                nxt = cell.find_next_sibling()
+                if nxt:
+                    firm = nxt.get_text(strip=True)
+            elif label in ("簽證會計師1", "簽證會計師2"):
+                nxt = cell.find_next_sibling()
+                if nxt and nxt.get_text(strip=True):
+                    cpas.append(nxt.get_text(strip=True))
+        return firm, cpas
+    except Exception as e:
+        print(f"  [!] 查詢 {co_id} 會計師失敗: {e}")
+        return "", []
+
+
+def load_seen_companies():
+    """讀取歷史上搜尋過的公司代號集合"""
+    if SEEN_FILE.exists():
+        try:
+            return set(json.loads(SEEN_FILE.read_text(encoding="utf-8")))
+        except Exception:
+            return set()
+    return set()
+
+
+def save_seen_companies(codes):
+    """儲存已搜尋過的公司代號集合"""
+    SEEN_FILE.parent.mkdir(exist_ok=True)
+    SEEN_FILE.write_text(
+        json.dumps(sorted(codes), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def scrape_mops_announcements(days=30):
     """爬取過去 N 天內、符合資安關鍵字的重大訊息"""
     today = datetime.now()
@@ -130,6 +188,29 @@ def scrape_mops_announcements(days=30):
 
     # 依日期新到舊排序
     announcements.sort(key=lambda a: a["date"], reverse=True)
+
+    # 標記 NEW（與歷史搜尋過的公司比對）+ 補上簽證會計師資訊
+    seen_codes = load_seen_companies()
+    auditor_cache = {}
+    print(f"\n[*] 標記 NEW 並查詢簽證會計師（歷史已知 {len(seen_codes)} 家）...")
+    for ann in announcements:
+        code = ann["code"]
+        ann["is_new"] = code not in seen_codes
+
+        if code not in auditor_cache:
+            firm, cpas = get_auditor(code, session)
+            auditor_cache[code] = (firm, cpas)
+            time.sleep(0.2)
+        firm, cpas = auditor_cache[code]
+        ann["auditor_firm"] = firm
+        ann["auditor_cpas"] = cpas
+        tag = " 🆕" if ann["is_new"] else ""
+        print(f"  {ann['company']} ({code}){tag} - {firm} / {'、'.join(cpas)}")
+
+    # 更新歷史公司清單（把這次出現的都加進去）
+    seen_codes.update(a["code"] for a in announcements)
+    save_seen_companies(seen_codes)
+
     return announcements
 
 
@@ -161,11 +242,16 @@ def generate_report(announcements):
 
 """
     for ann in announcements:
-        markdown += f"""## {ann['company']} ({ann['code']}) - {ann['title']}
+        new_tag = " `NEW`" if ann.get("is_new") else ""
+        cpas = "、".join(ann.get("auditor_cpas", [])) or "—"
+        firm = ann.get("auditor_firm") or "—"
+        markdown += f"""## {ann['company']} ({ann['code']}){new_tag} - {ann['title']}
 
 **發布日期：** {ann['date']}
 **公司代號：** {ann['code']}
 **命中關鍵字：** {ann['keyword']}
+**簽證會計師事務所：** {firm}
+**簽證會計師：** {cpas}
 **公告連結：** {ann.get('link', '')}
 
 ---
@@ -200,13 +286,22 @@ def generate_html_email(announcements):
             f'<a href="{link}" style="color:#1565c0;">{ann["title"]}</a>'
             if link else ann["title"]
         )
+        new_badge = (
+            '<span style="background:#e53935;color:white;font-size:11px;'
+            'padding:2px 6px;border-radius:3px;margin-left:4px;">NEW</span>'
+            if ann.get("is_new") else ""
+        )
+        firm = ann.get("auditor_firm") or "—"
+        cpas = "、".join(ann.get("auditor_cpas", [])) or "—"
         rows_html += f"""
         <tr>
-            <td style="padding:8px;border:1px solid #ddd;">{ann['company']}</td>
+            <td style="padding:8px;border:1px solid #ddd;white-space:nowrap;">{ann['company']}{new_badge}</td>
             <td style="padding:8px;border:1px solid #ddd;">{ann['code']}</td>
             <td style="padding:8px;border:1px solid #ddd;white-space:nowrap;">{ann['date']}</td>
             <td style="padding:8px;border:1px solid #ddd;">{title_cell}</td>
             <td style="padding:8px;border:1px solid #ddd;">{ann['keyword']}</td>
+            <td style="padding:8px;border:1px solid #ddd;white-space:nowrap;">{firm}</td>
+            <td style="padding:8px;border:1px solid #ddd;white-space:nowrap;">{cpas}</td>
         </tr>"""
 
     return f"""
@@ -214,7 +309,8 @@ def generate_html_email(announcements):
     <h2 style="color:#2c3e50;">MOPS 資安重訊監控報告</h2>
     <p><b>報告日期：</b>{today}<br>
     <b>資料期間：</b>{one_month_ago} 至 {today}<br>
-    <b>公告數量：</b>{len(announcements)} 筆</p>
+    <b>公告數量：</b>{len(announcements)} 筆<br>
+    <span style="font-size:12px;color:#888;">標記 <b style="color:#e53935;">NEW</b> 表示首次出現的公司</span></p>
     <table style="border-collapse:collapse;width:100%;font-size:14px;">
         <tr style="background:#2c3e50;color:white;">
             <th style="padding:10px;border:1px solid #ddd;">公司名稱</th>
@@ -222,6 +318,8 @@ def generate_html_email(announcements):
             <th style="padding:10px;border:1px solid #ddd;">日期</th>
             <th style="padding:10px;border:1px solid #ddd;">主旨</th>
             <th style="padding:10px;border:1px solid #ddd;">命中關鍵字</th>
+            <th style="padding:10px;border:1px solid #ddd;">簽證會計師事務所</th>
+            <th style="padding:10px;border:1px solid #ddd;">簽證會計師</th>
         </tr>
         {rows_html}
     </table>
@@ -276,6 +374,8 @@ def git_commit_push(report_file):
         subprocess.run(["git", "config", "user.email", "automation@mops-monitor.local"], check=True)
         subprocess.run(["git", "config", "user.name", "MOPS Monitor"], check=True)
         subprocess.run(["git", "add", str(report_file)], check=True)
+        if SEEN_FILE.exists():
+            subprocess.run(["git", "add", str(SEEN_FILE)], check=True)
         today = datetime.now().strftime("%Y-%m-%d")
         result = subprocess.run(
             ["git", "commit", "-m", f"MOPS report: {today}"],
