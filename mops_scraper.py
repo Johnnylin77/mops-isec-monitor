@@ -34,8 +34,8 @@ EMAIL_RECEIVER = "abcd830428@gmail.com"
 EZSEARCH_URL = "https://mopsov.twse.com.tw/mops/web/ezsearch_query"
 AUDITOR_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05st03"
 
-# 記錄歷史上搜尋過的公司代號（用於標記 NEW）
-SEEN_FILE = Path("reports") / "seen_companies.json"
+# 記錄「前一次報告」的公告清單（用於和這次比對，標記新出現的資安事件 NEW）
+PREV_FILE = Path("reports") / "previous_announcements.json"
 
 # 資安事件相關關鍵字（比對主旨 + 內文）
 # 註：原「系統異常」太籠統會誤中公開收購樣板，改用更精準的「資訊系統異常／資通系統異常」
@@ -121,21 +121,26 @@ def get_auditor(co_id, session):
         return "", []
 
 
-def load_seen_companies():
-    """讀取歷史上搜尋過的公司代號集合"""
-    if SEEN_FILE.exists():
+def announcement_key(ann):
+    """單一資安事件的唯一鍵：公司代號 + 發布日期 + 主旨"""
+    return f"{ann['code']}-{ann['date']}-{ann['title']}"
+
+
+def load_previous_keys():
+    """讀取『前一次報告』的公告鍵集合"""
+    if PREV_FILE.exists():
         try:
-            return set(json.loads(SEEN_FILE.read_text(encoding="utf-8")))
+            return set(json.loads(PREV_FILE.read_text(encoding="utf-8")))
         except Exception:
             return set()
     return set()
 
 
-def save_seen_companies(codes):
-    """儲存已搜尋過的公司代號集合"""
-    SEEN_FILE.parent.mkdir(exist_ok=True)
-    SEEN_FILE.write_text(
-        json.dumps(sorted(codes), ensure_ascii=False, indent=2),
+def save_previous_keys(keys):
+    """把『這次報告』的公告鍵存起來，供下次比對"""
+    PREV_FILE.parent.mkdir(exist_ok=True)
+    PREV_FILE.write_text(
+        json.dumps(sorted(keys), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -189,13 +194,13 @@ def scrape_mops_announcements(days=30):
     # 依日期新到舊排序
     announcements.sort(key=lambda a: a["date"], reverse=True)
 
-    # 標記 NEW（與歷史搜尋過的公司比對）+ 補上簽證會計師資訊
-    seen_codes = load_seen_companies()
+    # 標記 NEW（和「前一次報告」比對，找出新出現的資安事件）+ 補上簽證會計師資訊
+    previous_keys = load_previous_keys()
     auditor_cache = {}
-    print(f"\n[*] 標記 NEW 並查詢簽證會計師（歷史已知 {len(seen_codes)} 家）...")
+    print(f"\n[*] 標記 NEW 並查詢簽證會計師（前一次報告共 {len(previous_keys)} 筆）...")
     for ann in announcements:
         code = ann["code"]
-        ann["is_new"] = code not in seen_codes
+        ann["is_new"] = announcement_key(ann) not in previous_keys
 
         if code not in auditor_cache:
             firm, cpas = get_auditor(code, session)
@@ -207,9 +212,8 @@ def scrape_mops_announcements(days=30):
         tag = " 🆕" if ann["is_new"] else ""
         print(f"  {ann['company']} ({code}){tag} - {firm} / {'、'.join(cpas)}")
 
-    # 更新歷史公司清單（把這次出現的都加進去）
-    seen_codes.update(a["code"] for a in announcements)
-    save_seen_companies(seen_codes)
+    # 把「這次報告」的公告清單存起來，供下次比對
+    save_previous_keys(announcement_key(a) for a in announcements)
 
     return announcements
 
@@ -374,8 +378,8 @@ def git_commit_push(report_file):
         subprocess.run(["git", "config", "user.email", "automation@mops-monitor.local"], check=True)
         subprocess.run(["git", "config", "user.name", "MOPS Monitor"], check=True)
         subprocess.run(["git", "add", str(report_file)], check=True)
-        if SEEN_FILE.exists():
-            subprocess.run(["git", "add", str(SEEN_FILE)], check=True)
+        if PREV_FILE.exists():
+            subprocess.run(["git", "add", str(PREV_FILE)], check=True)
         today = datetime.now().strftime("%Y-%m-%d")
         result = subprocess.run(
             ["git", "commit", "-m", f"MOPS report: {today}"],
