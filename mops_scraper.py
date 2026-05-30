@@ -16,7 +16,7 @@ import smtplib
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 
@@ -55,6 +55,15 @@ KEYWORDS = [
 
 # 市場別：sii=上市, otc=上櫃, rotc=興櫃, pub=公開發行
 MARKETS = ["sii", "otc", "rotc", "pub"]
+
+
+# 台灣時區（UTC+8），確保本機與雲端（CI 為 UTC）的日期一致
+TW_TZ = timezone(timedelta(hours=8))
+
+
+def now_tw():
+    """目前的台灣時間（UTC+8）"""
+    return datetime.now(TW_TZ)
 
 
 def roc_date(dt):
@@ -147,7 +156,7 @@ def save_previous_keys(keys):
 
 def scrape_mops_announcements(days=30):
     """爬取過去 N 天內、符合資安關鍵字的重大訊息"""
-    today = datetime.now()
+    today = now_tw()
     sdate = roc_date(today - timedelta(days=days))
     edate = roc_date(today)
 
@@ -219,8 +228,8 @@ def scrape_mops_announcements(days=30):
 
 
 def generate_report(announcements):
-    today = datetime.now().strftime("%Y-%m-%d")
-    one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    today = now_tw().strftime("%Y-%m-%d")
+    one_month_ago = (now_tw() - timedelta(days=30)).strftime("%Y-%m-%d")
 
     if not announcements:
         return f"""# MOPS 資安重訊監控報告
@@ -265,8 +274,8 @@ def generate_report(announcements):
 
 
 def generate_html_email(announcements):
-    today = datetime.now().strftime("%Y-%m-%d")
-    one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    today = now_tw().strftime("%Y-%m-%d")
+    one_month_ago = (now_tw() - timedelta(days=30)).strftime("%Y-%m-%d")
 
     if not announcements:
         return f"""
@@ -338,7 +347,7 @@ def send_email(announcements, report_markdown):
         print("[!] 未設定 GMAIL_APP_PASSWORD，跳過發信")
         return False
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_tw().strftime("%Y-%m-%d")
     if announcements:
         subject = f"【MOPS 資安重訊】{today} 共 {len(announcements)} 筆公告"
     else:
@@ -365,7 +374,7 @@ def send_email(announcements, report_markdown):
 def save_report(markdown_content):
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_tw().strftime("%Y-%m-%d")
     report_file = reports_dir / f"{today}-isec-report.md"
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(markdown_content)
@@ -380,7 +389,7 @@ def git_commit_push(report_file):
         subprocess.run(["git", "add", str(report_file)], check=True)
         if PREV_FILE.exists():
             subprocess.run(["git", "add", str(PREV_FILE)], check=True)
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now_tw().strftime("%Y-%m-%d")
         result = subprocess.run(
             ["git", "commit", "-m", f"MOPS report: {today}"],
             capture_output=True, text=True
