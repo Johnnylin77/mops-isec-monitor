@@ -243,6 +243,41 @@ def build_pptx(announcements, out_path, report_date, period_start):
         _text(s, "、".join(names_by_type.get(t, []))[:40], 6.45, y + 0.55, 6.1, 0.3, 11.5, DARK, bold=True)
         _text(s, desc.get(t, ""), 6.45, y + 0.84, 6.2, 0.36, 11, GRAY)
 
+    # ===== Slide：簽證會計師一覽 =====
+    s = _slide(prs)
+    _bg(s, LIGHT, W, H)
+    _text(s, "簽證會計師一覽", 0.6, 0.4, 9, 0.7, 30, DARK, bold=True)
+    _text(s, "各公司目前之簽證會計師事務所與簽證會計師", 0.62, 1.1, 11, 0.4, 13, GRAY)
+
+    a_headers = ["公司", "代號", "事件類型", "簽證會計師事務所", "簽證會計師"]
+    a_col_w = [2.0, 0.95, 2.3, 3.7, 2.85]
+    an = len(announcements) + 1
+    a_shape = s.shapes.add_table(an, len(a_headers), Inches(0.6), Inches(1.75),
+                                 Inches(sum(a_col_w)), Inches(min(4.9, 0.5 * an)))
+    a_table = a_shape.table
+    a_table.first_row = False
+    a_table.horz_banding = False
+    for j, cw in enumerate(a_col_w):
+        a_table.columns[j].width = Inches(cw)
+    for j, htext in enumerate(a_headers):
+        cell = a_table.cell(0, j)
+        cell.fill.solid(); cell.fill.fore_color.rgb = NAVY
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        cell.margin_left = Inches(0.08); cell.margin_top = Inches(0.02); cell.margin_bottom = Inches(0.02)
+        _set_run(cell.text_frame.paragraphs[0].add_run(), htext, 12.5, WHITE, bold=True)
+    for i, a in enumerate(announcements, start=1):
+        firm = a.get("auditor_firm") or "—"
+        cpas = "、".join(a.get("auditor_cpas", [])) or "—"
+        et = a.get("event_type", "其他")
+        vals = [a["company"], a["code"], et, firm, cpas]
+        for j, v in enumerate(vals):
+            cell = a_table.cell(i, j)
+            cell.fill.solid(); cell.fill.fore_color.rgb = WHITE if i % 2 else ROW
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.margin_left = Inches(0.08); cell.margin_top = Inches(0.01); cell.margin_bottom = Inches(0.01)
+            col = TYPE_COLOR.get(v, DARK) if j == 2 else DARK
+            _set_run(cell.text_frame.paragraphs[0].add_run(), v, 11.5, col, bold=(j == 2))
+
     # ===== Slide 4：共通因應流程 =====
     s = _slide(prs)
     _bg(s, LIGHT, W, H)
