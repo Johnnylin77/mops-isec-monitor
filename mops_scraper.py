@@ -31,8 +31,14 @@ if sys.platform == 'win32':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # ─────────────────────────── 設定 ───────────────────────────
-EMAIL_SENDER = "abcd830428@gmail.com"
-EMAIL_RECEIVER = "abcd830428@gmail.com"
+# 寄件者與收件人皆由環境變數/GitHub Secret 提供，避免 email 出現在公開原始碼。
+#   EMAIL_SENDER     : 寄件 Gmail（專用帳號）
+#   EMAIL_RECEIVERS  : 收件人，多人以逗號分隔，例如 a@x.com, b@y.com
+#   GMAIL_APP_PASSWORD: 寄件帳號的應用程式密碼
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "").strip()
+EMAIL_RECEIVERS = [e.strip() for e in os.environ.get("EMAIL_RECEIVERS", "").split(",") if e.strip()]
+if not EMAIL_RECEIVERS and EMAIL_SENDER:
+    EMAIL_RECEIVERS = [EMAIL_SENDER]  # 未設定收件人時，預設寄給自己
 
 EZSEARCH_URL = "https://mopsov.twse.com.tw/mops/web/ezsearch_query"
 AUDITOR_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05st03"
@@ -419,6 +425,12 @@ def send_email(announcements, report_markdown, attachment_path=None):
     if not password:
         print("[!] 未設定 GMAIL_APP_PASSWORD，跳過發信")
         return False
+    if not EMAIL_SENDER:
+        print("[!] 未設定 EMAIL_SENDER（寄件帳號），跳過發信")
+        return False
+    if not EMAIL_RECEIVERS:
+        print("[!] 未設定 EMAIL_RECEIVERS（收件人），跳過發信")
+        return False
 
     today = now_tw().strftime("%Y-%m-%d")
     if announcements:
@@ -429,7 +441,7 @@ def send_email(announcements, report_markdown, attachment_path=None):
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
+    msg["To"] = ", ".join(EMAIL_RECEIVERS)
 
     body = MIMEMultipart("alternative")
     body.attach(MIMEText(report_markdown, "plain", "utf-8"))
@@ -452,8 +464,8 @@ def send_email(announcements, report_markdown, attachment_path=None):
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, password)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        print(f"[✓] 已發送 email 至 {EMAIL_RECEIVER}")
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
+        print(f"[✓] 已發送 email 至 {len(EMAIL_RECEIVERS)} 位收件人：{', '.join(EMAIL_RECEIVERS)}")
         return True
     except Exception as e:
         print(f"[!] 發信失敗: {e}")
