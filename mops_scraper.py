@@ -13,6 +13,7 @@ import os
 import re
 import time
 import json
+import calendar
 import smtplib
 from urllib.parse import quote, urlparse, parse_qs
 from email.mime.multipart import MIMEMultipart
@@ -82,6 +83,29 @@ def now_tw():
 def roc_date(dt):
     """西元 datetime → 民國年字串 115/05/30"""
     return f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+
+
+def _minus_one_month(dt):
+    """回推一個自然月（自動處理跨年與月底天數，如 5/31 → 4/30）"""
+    year, month = dt.year, dt.month - 1
+    if month == 0:
+        month, year = 12, year - 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def query_range():
+    """回傳查詢區間 (起日, 迄日)。
+
+    預設為「當天回推一個整月」；若設定環境變數 QUERY_DAYS=N，則改為回推 N 天。
+    """
+    end = now_tw()
+    env = os.environ.get("QUERY_DAYS", "").strip()
+    if env.isdigit():
+        start = end - timedelta(days=int(env))
+    else:
+        start = _minus_one_month(end)
+    return start, end
 
 
 def ezsearch(keyword, market, sdate, edate, session):
@@ -223,11 +247,12 @@ def save_previous_keys(keys):
     )
 
 
-def scrape_mops_announcements(days=30):
-    """爬取過去 N 天內、符合資安關鍵字的重大訊息"""
-    today = now_tw()
-    sdate = roc_date(today - timedelta(days=days))
-    edate = roc_date(today)
+def scrape_mops_announcements():
+    """爬取查詢區間內、符合資安關鍵字的重大訊息（預設當天回推一個月）"""
+    start, end = query_range()
+    sdate = roc_date(start)
+    edate = roc_date(end)
+    print(f"[*] 查詢區間：{start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}")
 
     session = requests.Session()
     announcements = []
@@ -307,8 +332,9 @@ def scrape_mops_announcements(days=30):
 
 
 def generate_report(announcements):
-    today = now_tw().strftime("%Y-%m-%d")
-    one_month_ago = (now_tw() - timedelta(days=30)).strftime("%Y-%m-%d")
+    start, end = query_range()
+    today = end.strftime("%Y-%m-%d")
+    one_month_ago = start.strftime("%Y-%m-%d")
 
     if not announcements:
         return f"""# MOPS 資安重訊監控報告
@@ -353,8 +379,9 @@ def generate_report(announcements):
 
 
 def generate_html_email(announcements):
-    today = now_tw().strftime("%Y-%m-%d")
-    one_month_ago = (now_tw() - timedelta(days=30)).strftime("%Y-%m-%d")
+    start, end = query_range()
+    today = end.strftime("%Y-%m-%d")
+    one_month_ago = start.strftime("%Y-%m-%d")
 
     if not announcements:
         return f"""
@@ -441,7 +468,8 @@ def send_email(announcements, report_markdown, attachment_path=None):
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = EMAIL_SENDER
-    msg["To"] = ", ".join(EMAIL_RECEIVERS)
+    # 以 BCC 方式寄送：信件 To 只顯示寄件者本身，收件人彼此看不到對方信箱
+    msg["To"] = EMAIL_SENDER
 
     body = MIMEMultipart("alternative")
     body.attach(MIMEText(report_markdown, "plain", "utf-8"))
@@ -512,11 +540,10 @@ def main():
     print("=" * 60)
 
     try:
-        # 查詢天數：預設 30 天，可用環境變數 QUERY_DAYS 調整
-        query_days = int(os.environ.get("QUERY_DAYS", "30"))
+        start, end = query_range()
 
-        print(f"\n[步驟 1] 全文檢索過去 {query_days} 天的資安重訊...")
-        announcements = scrape_mops_announcements(days=query_days)
+        print(f"\n[步驟 1] 全文檢索資安重訊（{start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}）...")
+        announcements = scrape_mops_announcements()
         print(f"\n[結果] 找到 {len(announcements)} 筆資安相關公告")
 
         print("\n[步驟 2] 生成報告...")
@@ -530,8 +557,8 @@ def main():
         if announcements:
             try:
                 from ppt_generator import build_pptx
-                report_date = now_tw().strftime("%Y-%m-%d")
-                period_start = (now_tw() - timedelta(days=query_days)).strftime("%Y-%m-%d")
+                report_date = end.strftime("%Y-%m-%d")
+                period_start = start.strftime("%Y-%m-%d")
                 pptx_path = build_pptx(announcements, str(PPTX_FILE), report_date, period_start)
                 print(f"[✓] 簡報已產生：{pptx_path}")
             except Exception as e:
