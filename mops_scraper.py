@@ -133,10 +133,11 @@ def ezsearch(keyword, market, sdate, edate, session):
     return data.get("data", []) or []
 
 
-def get_auditor(co_id, session):
+def get_auditor(co_id, session, retries=3):
     """查詢公司目前的簽證會計師事務所與會計師名稱
 
-    回傳 (事務所名稱, [會計師1, 會計師2])
+    回傳 (事務所名稱, [會計師1, 會計師2])。
+    MOPS 偶有限流/逾時導致回傳空白，故失敗或抓不到時自動重試。
     """
     data = {
         "encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1",
@@ -147,24 +148,29 @@ def get_auditor(co_id, session):
         "Referer": "https://mopsov.twse.com.tw/mops/web/t05st03",
         "User-Agent": "Mozilla/5.0",
     }
-    try:
-        resp = session.post(AUDITOR_URL, data=data, headers=headers, timeout=30)
-        soup = BeautifulSoup(resp.content.decode("utf-8", errors="replace"), "html.parser")
-        firm, cpas = "", []
-        for cell in soup.find_all(["th", "td"]):
-            label = cell.get_text(strip=True)
-            if label == "簽證會計師事務所":
-                nxt = cell.find_next_sibling()
-                if nxt:
-                    firm = nxt.get_text(strip=True)
-            elif label in ("簽證會計師1", "簽證會計師2"):
-                nxt = cell.find_next_sibling()
-                if nxt and nxt.get_text(strip=True):
-                    cpas.append(nxt.get_text(strip=True))
-        return firm, cpas
-    except Exception as e:
-        print(f"  [!] 查詢 {co_id} 會計師失敗: {e}")
-        return "", []
+    for attempt in range(retries):
+        try:
+            resp = session.post(AUDITOR_URL, data=data, headers=headers, timeout=30)
+            soup = BeautifulSoup(resp.content.decode("utf-8", errors="replace"), "html.parser")
+            firm, cpas = "", []
+            for cell in soup.find_all(["th", "td"]):
+                label = cell.get_text(strip=True)
+                if label == "簽證會計師事務所":
+                    nxt = cell.find_next_sibling()
+                    if nxt:
+                        firm = nxt.get_text(strip=True)
+                elif label in ("簽證會計師1", "簽證會計師2"):
+                    nxt = cell.find_next_sibling()
+                    if nxt and nxt.get_text(strip=True):
+                        cpas.append(nxt.get_text(strip=True))
+            if firm:  # 有抓到才回傳，否則重試
+                return firm, cpas
+        except Exception as e:
+            print(f"  [!] 查詢 {co_id} 會計師失敗(第{attempt + 1}次): {e}")
+        if attempt < retries - 1:
+            time.sleep(1.0 + attempt)  # 漸進式退避
+    print(f"  [!] {co_id} 會計師重試 {retries} 次仍無資料")
+    return "", []
 
 
 def classify_event_type(text):
@@ -178,8 +184,11 @@ def classify_event_type(text):
     return "其他"
 
 
-def get_incident_detail(link, session):
-    """依公告 HYPERLINK 抓取完整內文，解析發生緣由 / 影響 / 因應措施"""
+def get_incident_detail(link, session, retries=3):
+    """依公告 HYPERLINK 抓取完整內文，解析發生緣由 / 影響 / 因應措施
+
+    MOPS 偶有限流/逾時，抓不到內容時自動重試。
+    """
     result = {"cause": "", "impact": "", "future": "", "raw": ""}
     if not link:
         return result
@@ -196,30 +205,36 @@ def get_incident_detail(link, session):
         "Referer": "https://mopsov.twse.com.tw/mops/web/ezsearch",
         "User-Agent": "Mozilla/5.0",
     }
-    try:
-        resp = session.post(DETAIL_URL, data=params, headers=headers, timeout=30)
-        text = BeautifulSoup(resp.content.decode("utf-8", errors="replace"),
-                             "html.parser").get_text("\n", strip=True)
-        result["raw"] = text
-        block = text.split("說明", 1)[1] if "說明" in text else text
-        block = block.split("以上資料均由", 1)[0]
-        fields = {}
-        for item in re.split(r"\n?\s*\d+\.", block):
-            m = re.match(r"([^：:]{2,22})[：:](.*)", item.strip(), re.S)
-            if m:
-                fields[m.group(1).strip()] = re.sub(r"\s+", "", m.group(2))
+    for attempt in range(retries):
+        try:
+            resp = session.post(DETAIL_URL, data=params, headers=headers, timeout=30)
+            text = BeautifulSoup(resp.content.decode("utf-8", errors="replace"),
+                                 "html.parser").get_text("\n", strip=True)
+            block = text.split("說明", 1)[1] if "說明" in text else text
+            block = block.split("以上資料均由", 1)[0]
+            fields = {}
+            for item in re.split(r"\n?\s*\d+\.", block):
+                m = re.match(r"([^：:]{2,22})[：:](.*)", item.strip(), re.S)
+                if m:
+                    fields[m.group(1).strip()] = re.sub(r"\s+", "", m.group(2))
 
-        def pick(*kws):
-            for k, v in fields.items():
-                if any(kw in k for kw in kws):
-                    return v
-            return ""
+            def pick(*kws):
+                for k, v in fields.items():
+                    if any(kw in k for kw in kws):
+                        return v
+                return ""
 
-        result["cause"] = pick("發生緣由", "緣由")
-        result["impact"] = pick("損失或影響", "影響")
-        result["future"] = pick("因應措施", "改善情形")
-    except Exception as e:
-        print(f"  [!] 抓取內文失敗: {e}")
+            cause = pick("發生緣由", "緣由")
+            if cause or "說明" in text:  # 有抓到正常內容
+                result["raw"] = text
+                result["cause"] = cause
+                result["impact"] = pick("損失或影響", "影響")
+                result["future"] = pick("因應措施", "改善情形")
+                return result
+        except Exception as e:
+            print(f"  [!] 抓取內文失敗(第{attempt + 1}次): {e}")
+        if attempt < retries - 1:
+            time.sleep(1.0 + attempt)
     return result
 
 
