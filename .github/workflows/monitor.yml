@@ -2,8 +2,9 @@ name: MOPS 資安重訊監控
 
 on:
   schedule:
-    # 每天台灣時間 08:00（UTC 00:00）執行
-    - cron: '0 0 * * *'
+    # 每天台灣時間 10:00（UTC 02:00）執行
+    # 註：GitHub 排程在尖峰時段可能延遲數分鐘至數十分鐘，非整點時段較準
+    - cron: '0 2 * * *'
   workflow_dispatch:  # 允許手動觸發
 
 permissions:
