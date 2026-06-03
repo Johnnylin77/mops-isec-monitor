@@ -475,7 +475,10 @@ def send_email(announcements, report_markdown, attachment_path=None):
         return False
 
     today = now_tw().strftime("%Y-%m-%d")
-    if announcements:
+    new_count = sum(1 for a in announcements if a.get("is_new"))
+    if new_count:
+        subject = f"【MOPS 資安重訊】{today} 新增 {new_count} 筆資安事件（區間共 {len(announcements)} 筆）"
+    elif announcements:
         subject = f"【MOPS 資安重訊】{today} 共 {len(announcements)} 筆公告"
     else:
         subject = f"【MOPS 資安重訊】{today} 無資安事件"
@@ -559,7 +562,8 @@ def main():
 
         print(f"\n[步驟 1] 全文檢索資安重訊（{start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}）...")
         announcements = scrape_mops_announcements()
-        print(f"\n[結果] 找到 {len(announcements)} 筆資安相關公告")
+        new_items = [a for a in announcements if a.get("is_new")]
+        print(f"\n[結果] 找到 {len(announcements)} 筆（其中 {len(new_items)} 筆為新事件 NEW）")
 
         print("\n[步驟 2] 生成報告...")
         report = generate_report(announcements)
@@ -567,9 +571,10 @@ def main():
         print("\n[步驟 3] 保存報告...")
         report_file = save_report(report)
 
-        print("\n[步驟 4] 產生分析簡報 PPT...")
-        pptx_path = None
-        if announcements:
+        # 只有出現新事件(NEW)時才產生簡報並發信
+        if new_items:
+            print("\n[步驟 4] 產生分析簡報 PPT...")
+            pptx_path = None
             try:
                 from ppt_generator import build_pptx
                 report_date = end.strftime("%Y-%m-%d")
@@ -580,17 +585,15 @@ def main():
                 print(f"[!] 產生簡報失敗: {e}")
                 import traceback
                 traceback.print_exc()
-        else:
-            print("[*] 無資安事件，略過簡報")
 
-        print("\n[步驟 5] 發送 Email...")
-        send_email(announcements, report, attachment_path=pptx_path)
-
-        if announcements:
-            print("\n[步驟 6] 提交到 GitHub...")
-            git_commit_push(report_file)
+            print("\n[步驟 5] 發送 Email...")
+            send_email(announcements, report, attachment_path=pptx_path)
         else:
-            print("\n[步驟 6] 無資安事件，略過 GitHub 提交")
+            print("\n[步驟 4-5] 本次無新增資安事件(NEW)，略過簡報與發信")
+
+        # 一律提交，持久化 previous_announcements.json 以維持 NEW 比對正確
+        print("\n[步驟 6] 提交到 GitHub...")
+        git_commit_push(report_file)
 
         print("\n" + "=" * 60)
         print("[✓] 完成！")
