@@ -1,0 +1,164 @@
+# MOPS 資安重訊監控報告
+
+**報告日期：** 2026-10-08
+**資料期間：** 2026-09-08 至 2026-10-08
+**資料來源：** 台灣證券交易所公開資訊觀測站
+**公告數量：** 14
+
+---
+
+## 上福 (6128) `NEW` - 代重要子公司Katun Corporation公告網路資安事件說明
+
+**發布日期：** 115/10/07
+**公司代號：** 6128
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安永聯合會計師事務所
+**簽證會計師：** 黃宇廷、賴書晨
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=181035&SPOKE_DATE=20261007&COMPANY_ID=6128
+
+---
+
+## 杏一 (4175) `NEW` - 本公司接獲消費者反映疑似個資外洩事件
+
+**發布日期：** 115/10/07
+**公司代號：** 4175
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 勤業眾信聯合會計師事務所
+**簽證會計師：** 池瑞全、蔡宗遠
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=234736&SPOKE_DATE=20261007&COMPANY_ID=4175
+
+---
+
+## 鈊象 (3293) `NEW` - 本公司網路資安事件補充說明
+
+**發布日期：** 115/10/07
+**公司代號：** 3293
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 勤業眾信聯合會計師事務所
+**簽證會計師：** 周仕杰、李東峰
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=192004&SPOKE_DATE=20261007&COMPANY_ID=3293
+
+---
+
+## 一零四 (3130) - 說明本公司發生網路資安事件
+
+**發布日期：** 115/10/06
+**公司代號：** 3130
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安侯建業聯合會計師事務所
+**簽證會計師：** 趙敏如、江家齊
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=2&SPOKE_TIME=170134&SPOKE_DATE=20261006&COMPANY_ID=3130
+
+---
+
+## 安心 (1259) - 本公司接獲消費者反應疑似個資外洩事件
+
+**發布日期：** 115/10/01
+**公司代號：** 1259
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 資誠聯合會計師事務所
+**簽證會計師：** 徐明釧、陳怡婷
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=2&SPOKE_TIME=174120&SPOKE_DATE=20261001&COMPANY_ID=1259
+
+---
+
+## 神腦 (2450) - 本公司發生網路資安事件說明
+
+**發布日期：** 115/09/29
+**公司代號：** 2450
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 資誠聯合會計師事務所
+**簽證會計師：** 王銘義、林永智
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=172510&SPOKE_DATE=20260929&COMPANY_ID=2450
+
+---
+
+## 鈊象 (3293) - 本公司網路資安事件說明
+
+**發布日期：** 115/09/29
+**公司代號：** 3293
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 勤業眾信聯合會計師事務所
+**簽證會計師：** 周仕杰、李東峰
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=205303&SPOKE_DATE=20260929&COMPANY_ID=3293
+
+---
+
+## 柏文 (8462) - 本公司接獲系統委外廠商通知其發生網路資安事件
+
+**發布日期：** 115/09/23
+**公司代號：** 8462
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安永聯合會計師事務所
+**簽證會計師：** 洪福讚、陳政初
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=175401&SPOKE_DATE=20260923&COMPANY_ID=8462
+
+---
+
+## 友訊 (2332) - 本公司發生網路資安事件
+
+**發布日期：** 115/09/18
+**公司代號：** 2332
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安侯建業聯合會計師事務所
+**簽證會計師：** 梅元貞、謝秋華
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=173342&SPOKE_DATE=20260918&COMPANY_ID=2332
+
+---
+
+## 長榮航 (2618) - 本公司發生網路資安事件
+
+**發布日期：** 115/09/15
+**公司代號：** 2618
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安侯建業聯合會計師事務所
+**簽證會計師：** 陳雅琳、楊雲筑
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=2&SPOKE_TIME=212632&SPOKE_DATE=20260915&COMPANY_ID=2618
+
+---
+
+## 長榮航太 (2645) - 公司部分資訊系統遭受網路攻擊
+
+**發布日期：** 115/09/15
+**公司代號：** 2645
+**命中關鍵字：** 網路攻擊
+**簽證會計師事務所：** 安侯建業聯合會計師事務所
+**簽證會計師：** 陳雅琳、鄭博仁
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=3&SPOKE_TIME=212858&SPOKE_DATE=20260915&COMPANY_ID=2645
+
+---
+
+## 崴寶 (7744) - 本公司資訊安全事件說明
+
+**發布日期：** 115/09/14
+**公司代號：** 7744
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 安永聯合會計師事務所
+**簽證會計師：** 黃宇廷、黃子評
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=152441&SPOKE_DATE=20260914&COMPANY_ID=7744
+
+---
+
+## 達爾膚 (6523) - 本公司網路資安事件說明
+
+**發布日期：** 115/09/11
+**公司代號：** 6523
+**命中關鍵字：** 資安事件
+**簽證會計師事務所：** 資誠聯合會計師事務所
+**簽證會計師：** 于智帆、葉翠苗
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=140332&SPOKE_DATE=20260911&COMPANY_ID=6523
+
+---
+
+## 大車隊 (2640) - 代重要子公司全球商務科技股份有限公
+司說明資訊系統遭受網路攻擊事件
+
+**發布日期：** 115/09/09
+**公司代號：** 2640
+**命中關鍵字：** 攻擊事件
+**簽證會計師事務所：** 資誠聯合會計師事務所
+**簽證會計師：** 支秉鈞、涂展源
+**公告連結：** https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?firstin=true&stp=1&step=1&SEQ_NO=1&SPOKE_TIME=224533&SPOKE_DATE=20260909&COMPANY_ID=2640
+
+---
+
